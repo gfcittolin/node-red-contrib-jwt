@@ -1,11 +1,11 @@
 {
-    "name": "node-red-contrib-jwt",
+    "name": "@gfcittolin/node-red-contrib-jwt",
     "version": "0.1.0",
     "description": "JWT Validator and Signer ",
     "main": "index.js",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/chameleonbr/node-red-contrib-jwt.git"
+        "url": "git+https://github.com/gfcittolin/node-red-contrib-jwt.git"
     },
     "keywords": [
         "jwt",
@@ -22,9 +22,9 @@
     },
     "license": "MIT",
     "bugs": {
-        "url": "https://github.com/chameleonbr/node-red-contrib-jwt/issues"
+        "url": "https://github.com/gfcittolin/node-red-contrib-jwt/issues"
     },
-    "homepage": "https://github.com/chameleonbr/node-red-contrib-jwt#readme",
+    "homepage": "https://github.com/gfcittolin/node-red-contrib-jwt#readme",
     "dependencies": {
         "jsonwebtoken": "^8.5.1",
         "node-jwk": "^0.1.0",
