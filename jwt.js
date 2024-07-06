@@ -16,7 +16,7 @@ module.exports = function (RED) {
         var node = this;
 
         if (node.jwkurl) {
-            GetJWK(node.jwkurl, node);
+            attachJWK(node.jwkurl, node);
         }else{
             node.jwk = false;
             // changed to load key on deploy level and not on runtime level why fs.readFileSync is sync.
@@ -35,26 +35,32 @@ module.exports = function (RED) {
             send = send || function() { node.send.apply(node,arguments) }
             done = done || function(err) { if(err)node.error(err, msg); }
 
+            const unsignedToken = msg[node.signvar];
+
+            function handleSignResult(err, token) {
+                if (err) {
+                    done(err);
+                } else {
+                    msg[node.storetoken] = token;
+                    send(msg);
+                    done();
+                }
+            }
+
             try {
                 if (node.jwk) {
                     //use JWK to sign
-                    var key = node.jwk.findKeyById(node.jwkkid);
-                    if (key === undefined) {
-                        console.log("No Key Found in JWK: " + node.jwkkid)
-                    }
-                    node.secret = key.key.toPrivateKeyPEM();
+                    const kid = node.jwkkid;
+                    node.findJWKKeyById(kid, key => {
+                        const secret = key && key.key.toPrivateKeyPEM();
+
+                        const jwtSignOpts = { algorithm: node.alg, expiresIn: node.exp, keyid: kid }
+                        jwt.sign(unsignedToken, secret, jwtSignOpts, handleSignResult);
+                    });
+                } else {
+                    const jwtSignOpts = { algorithm: node.alg, expiresIn: node.exp }
+                    jwt.sign(unsignedToken, node.secret, jwtSignOpts, handleSignResult);
                 }
-                jwt.sign(msg[node.signvar],
-                        node.secret,
-                        {algorithm: node.alg, expiresIn: node.exp, keyid: node.jwkkid}, function (err, token) {
-                    if (err) {
-                       done(err);
-                    } else {
-                        msg[node.storetoken] = token;
-                        send(msg);
-                        done();
-                    }
-                });
             } catch (err) {
                 node.error(err.message);
             }
@@ -84,7 +90,7 @@ module.exports = function (RED) {
         var node = this;
 
         if (node.jwkurl) {
-            GetJWK(node.jwkurl, node);
+            attachJWK(node.jwkurl, node);
         }else{
             node.jwk = false;
             if (contains(node.alg, 'RS256') || contains(node.alg, 'RS384') || contains(node.alg, 'RS512') || contains(node.alg, 'ES512') || contains(node.alg, 'ES384') || contains(node.alg, 'ES256')) {
@@ -110,25 +116,9 @@ module.exports = function (RED) {
                 }
             }
 
-            if (node.jwk) {
-                //use JWK to verify
-                var header = GetTokenHeader(msg[node.signvar]);
-                //find kid if present
-                var kid = header.kid;
-                var key;
+            const signedToken = msg[node.signvar];
 
-                if (kid !== undefined) {
-                    key = node.jwk.findKeyById(kid);
-                } else {
-                    //...otherwise use first key in set
-                    key = node.jwk.keys[0];
-                }
-                
-                node.alg = header.alg;
-                node.secret = key.key.toPublicKeyPEM();
-            }
-
-            jwt.verify(msg[node.signvar], node.secret, {algorithms: node.alg}, function (err, decoded) {
+            function handleVerificationResult(err, decoded) {
                 if (err) {
                     msg['payload'] = err;
                     msg['statusCode'] = 401;
@@ -138,33 +128,68 @@ module.exports = function (RED) {
                     send([msg, null]);
                     done();
                 }
-            });
+            }
+
+            if (node.jwk) {
+                //use JWK to verify
+                var header = GetTokenHeader(signedToken);
+                //find kid if present
+                var kid = header.kid;
+
+                node.findJWKKeyById(kid, key => {
+                    const secret = key && key.key.toPublicKeyPEM();
+
+                    jwt.verify(signedToken, secret, { algorithms: node.alg }, handleVerificationResult);
+                })
+            } else {
+                jwt.verify(signedToken, node.secret, { algorithms: node.alg }, handleVerificationResult);
+            }
         });
     }
     RED.nodes.registerType("jwt verify", JwtVerify);
 
-    function GetJWK(url, node) {
-        //fetch jwk and cache it in node
-        var jwk;
-        var njwk = require('node-jwk');
-        var request = require("request");
-        request({
-            url: url,
-            json: true
-        }, function (error, response, body) {
-            if (!error && response.statusCode === 200) {
-                node.jwk = njwk.JWKSet.fromObject(body);
-                console.log(node.jwk._keys.length + " keys loaded from JWK: " + url );
-            } else {
-                console.log("Unable to fetch JWK: " + url);
-            }
-        })
-    }
+    function attachJWK(url, node) {
+        const njwk = require('node-jwk');
+        const request = require("request");
+        let jwkSet;
 
-    function GetTokenKid(token) {
-        //get kid from token header
-        var header = GetTokenHeader(token);
-        return header.kid;
+        node.jwk = true;
+        node.findJWKKeyById = function(kid, cb) {
+            // return first key on set if kid not provided
+            if (!kid) return process.nextTick(() => cb(jwkSet && jwkSet.keys[0]));
+
+            const cachedKey = jwkSet && jwkSet.findKeyById(kid);
+            if (cachedKey) {
+                // cached key found, return it
+                process.nextTick(() => cb(cachedKey));
+
+            } else {   
+                //cached key not found, try refreshing the cache
+                refreshCache(() => {
+                    //get from fetched ...otherwise use first key in set
+                    const key = jwkSet && jwkSet.findKeyById(kid);
+                    cb(key);
+                });
+            }
+        }
+
+        function refreshCache(cb) {
+            request({
+                url: url,
+                json: true
+            }, function (error, response, body) {
+                if (!error && response.statusCode === 200) {
+                    jwkSet = njwk.JWKSet.fromObject(body);
+                    console.log(jwkSet._keys.length + " keys loaded from JWK: " + url );
+                } else {
+                    console.log("Unable to fetch JWK: " + url);
+                }
+                if (cb) cb();
+            })
+        }
+
+        //populate initial cache
+        refreshCache();
     }
 
     function GetTokenHeader(token) {
