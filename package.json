@@ -1,6 +1,6 @@
 {
     "name": "@gfcittolin/node-red-contrib-jwt",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "JWT Validator and Signer ",
     "main": "index.js",
     "repository": {
